@@ -1,0 +1,35 @@
+{
+  "name": "corba-idl-parser",
+  "version": "0.0.0",
+  "description": "parser of IDL in CORBA format",
+  "main": "index.js",
+  "scripts": {
+    "format": "prettier --write \"**/*.ts\"",
+    "postformat": "tslint -p . --fix",
+    "dev": "npm run format && npm test",
+    "test": "ts-node src/index.ts ./examples/idl/data.idl"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/beenotung/corba-idl-parser.git"
+  },
+  "keywords": [
+    "IDL",
+    "CORBA",
+    "parser"
+  ],
+  "author": "Beeno Tung",
+  "license": "BSD-2-Clause",
+  "bugs": {
+    "url": "https://github.com/beenotung/corba-idl-parser/issues"
+  },
+  "homepage": "https://github.com/beenotung/corba-idl-parser#readme",
+  "devDependencies": {
+    "@types/node": "^10.5.2",
+    "prettier": "^1.13.7",
+    "ts-node": "^7.0.0",
+    "tslint": "^5.10.0",
+    "tslint-eslint-rules": "^5.3.1",
+    "typescript": "^2.9.2"
+  }
+}

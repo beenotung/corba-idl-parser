@@ -1,0 +1,3 @@
+[submodule "examples/chaincode-nestjs-ionic-template"]
+	path = examples/chaincode-nestjs-ionic-template
+	url = https://github.com/beenotung/chaincode-nestjs-ionic-template
