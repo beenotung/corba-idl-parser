@@ -7,7 +7,9 @@
     "format": "prettier --write \"**/*.ts\"",
     "postformat": "tslint -p . --fix",
     "dev": "npm run format && npm test",
-    "test": "ts-node src/index.ts ./examples/idl/data.idl"
+    "gen-type": "ts-node tool/gen-type.ts",
+    "test": "ts-node src/index.ts ./examples/struct.idl",
+    "test0": "ts-node src/index.ts ./examples/idl/data.idl"
   },
   "repository": {
     "type": "git",

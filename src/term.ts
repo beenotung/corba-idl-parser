@@ -10,7 +10,7 @@ export class Space extends Expr {
   }
 
   toIDLString() {
-    return ' '
+    return ' '.repeat(this.nSpace)
   }
 }
 
@@ -20,7 +20,10 @@ export class Newline extends Expr {
   }
 }
 
-export class SingleLineComment extends Expr {
+export abstract class Comment extends Expr {
+}
+
+export class SingleLineComment extends Comment {
   constructor(public value: string) {
     super()
   }
@@ -34,7 +37,7 @@ export class SingleLineComment extends Expr {
   }
 }
 
-export class MultiLineComment extends Expr {
+export class MultiLineComment extends Comment {
   constructor(public value: string) {
     super()
   }
@@ -76,20 +79,35 @@ export class Type extends Expr {
   }
 }
 
-export class VarString extends Type {
-  value = 'string'
+export abstract class StringType extends Type {
 }
 
-export class FixString extends Type {
-  constructor(public length: string) {
-    super();
-    this.value = `string<${length}>`;
+export class VarString extends StringType {
+  constructor() {
+    super('string')
+  }
+}
+
+export class FixString extends StringType {
+  constructor(public length: number) {
+    super(`string<${length}>`);
+  }
+}
+
+export class NumberType extends Type {
+}
+
+export class Sequence extends Type {
+  constructor(public type: Type) {
+    super(`sequence<${type.value}>`)
   }
 }
 
 export class Module extends Expr {
-  name: string;
-  body: Expr[] = [];
+  constructor(public name: string,
+              public body: Expr[] = []) {
+    super()
+  }
 
   toIDLString(): iolist {
     return ['module ',
@@ -102,31 +120,39 @@ export class Module extends Expr {
 }
 
 export class TypeDef extends Expr {
-  constructor(public type: string, public name: string) {
+  constructor(public type: Type, public name: string) {
     super();
   }
 
   toIDLString() {
     return [
       'typedef ',
-      this.type, ' ',
+      this.type.toIDLString(), ' ',
       this.name,
       ';',
     ]
   }
 }
 
+export interface TypeName {
+  type: Type
+  name: Name
+}
+
+// TODO support comments
 export class Struct extends Expr {
-  name: string;
-  body: Expr[] = [];
+  constructor(public name: string,
+              public fields: TypeName[]) {
+    super()
+  }
 
   toIDLString() {
     return [
       'struct ',
       this.name,
       '{',
-      this.body.map(x => x.toIDLString()) as any,
+      this.fields.map(x => [x.name.toIDLString(), ' ', x.type.toIDLString(), x, ';']) as string[][],
       '};',
-    ]
+    ] as iolist
   }
 }
