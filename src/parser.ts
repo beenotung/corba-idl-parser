@@ -1,890 +1,513 @@
-import {
-  Define, Expr, FixString, IfNDef, Include, Module, MultiLineComment, Name, NumberType, Sequence,
-  SingleLineComment, Space, Struct, Type, TypeDef, VarString
-} from "./term";
-import {iolist, iolist_to_string, readFile} from "./io";
-import {config} from "./config";
+import {config} from './config';
+import {iolist, iolist_to_string, readFile} from './io';
+import {Comment, Expr, Module, MultiLineComment, SingleLineComment, Space, Struct, Sym, TypeName,} from './term';
+import {inspect} from "./debug";
 
-interface ParseResult<Char, Item> {
-  remind: Char[];
-  offset: number;
-  result: Item;
-}
-
-abstract class Parser<Char, Item> {
+abstract class Checker<Item> {
   constructor(public name: string) {
   }
 
-  public abstract parse(xs: Char[], offset: number): Array<ParseResult<Char, Item>>;
-}
-
-namespace Parser {
-  export function run<Char, Item>(xs: Char[], offset: number, parser: Parser<Char, Item>): ParseResult<Char, Item> {
-    console.debug(`(${offset}/${xs.length})`, 'run', parser.name, `[${xs[offset]}]`);
-    const res = parser.parse(xs, offset);
-    if (res.length !== 1) {
-      console.error('result:', res);
-      throw new Error("expect one result");
-    }
-    return res[0];
-  }
-
-  export function then<Char, A, B>(parserA: Parser<Char, A>, parserB: Parser<Char, B>): Parser<Char, [A, B]> {
-    class ParserC extends Parser<Char, [A, B]> {
-      parse(xs: Char[], offset: number): Array<ParseResult<Char, [A, B]>> {
-        const res: ParseResult<Char, [A, B]>[] = [];
-        for (const resA of parserA.parse(xs, offset)) {
-          for (const resB of parserB.parse(resA.remind, resA.offset)) {
-            res.push({
-              remind: resB.remind,
-              offset: resB.offset,
-              result: [resA.result, resB.result]
-            });
-          }
-        }
-        return res;
-      }
-    }
-
-    return new ParserC(`(${parserA.name} then ${parserB.name})`);
-  }
-
-  export function or<Char, A, B>(parserA: Parser<Char, A>, parserB: Parser<Char, B>): Parser<Char, A | B> {
-    class ParserOr extends Parser<Char, A | B> {
-      parse(xs: Char[], offset: number): Array<ParseResult<Char, A | B>> {
-        const resA = parserA.parse(xs, offset);
-        if (resA.length > 0) {
-          return resA;
-        }
-        return parserB.parse(xs, offset);
-      }
-    }
-
-    return new ParserOr(`(${parserA.name} or ${parserB.name})`)
-  }
-
-  export function orAll<Char, A1>(p1: Parser<Char, A1>): Parser<Char, A1>
-  export function orAll<Char, A1, A2>(p1: Parser<Char, A1>, p2: Parser<Char, A2>): Parser<Char, A1 | A2>
-  export function orAll<Char, A1, A2, A3>(p1: Parser<Char, A1>, p2: Parser<Char, A2>, p3: Parser<Char, A3>): Parser<Char, A1 | A2 | A3>
-  export function orAll<Char, A1, A2, A3, A4>(p1: Parser<Char, A1>, p2: Parser<Char, A2>, p3: Parser<Char, A3>, p4: Parser<Char, A4>): Parser<Char, A1 | A2 | A3 | A4>
-  export function orAll<Char, A1, A2, A3, A4, A5>(p1: Parser<Char, A1>, p2: Parser<Char, A2>, p3: Parser<Char, A3>, p4: Parser<Char, A4>, p5: Parser<Char, A5>): Parser<Char, A1 | A2 | A3 | A4 | A5>
-  export function orAll<Char, A1, A2, A3, A4, A5, A6>(p1: Parser<Char, A1>, p2: Parser<Char, A2>, p3: Parser<Char, A3>, p4: Parser<Char, A4>, p5: Parser<Char, A5>, p6: Parser<Char, A6>): Parser<Char, A1 | A2 | A3 | A4 | A5 | A6>
-  export function orAll<Char, A1, A2, A3, A4, A5, A6, A7>(p1: Parser<Char, A1>, p2: Parser<Char, A2>, p3: Parser<Char, A3>, p4: Parser<Char, A4>, p5: Parser<Char, A5>, p6: Parser<Char, A6>, p7: Parser<Char, A7>): Parser<Char, A1 | A2 | A3 | A4 | A5 | A6 | A7>
-  export function orAll<Char, A1, A2, A3, A4, A5, A6, A7, A8>(p1: Parser<Char, A1>, p2: Parser<Char, A2>, p3: Parser<Char, A3>, p4: Parser<Char, A4>, p5: Parser<Char, A5>, p6: Parser<Char, A6>, p7: Parser<Char, A7>, p8: Parser<Char, A8>): Parser<Char, A1 | A2 | A3 | A4 | A5 | A6 | A7 | A8>
-  export function orAll<Char, A1, A2, A3, A4, A5, A6, A7, A8, A9>(p1: Parser<Char, A1>, p2: Parser<Char, A2>, p3: Parser<Char, A3>, p4: Parser<Char, A4>, p5: Parser<Char, A5>, p6: Parser<Char, A6>, p7: Parser<Char, A7>, p8: Parser<Char, A8>, p9: Parser<Char, A9>): Parser<Char, A1 | A2 | A3 | A4 | A5 | A6 | A7 | A8 | A9>
-
-  export function orAll<Char, Item>(...parsers: Array<Parser<Char, Item>>): Parser<Char, Item> ;
-  export function orAll<Char, Item>(...parsers: Array<Parser<Char, Item>>): Parser<Char, Item> {
-    let acc = parsers.shift();
-    for (; ;) {
-      let c = parsers.shift();
-      if (c) {
-        acc = or(acc, c);
+  public checkAll(cs: any[], offset: number): Array<Item | any> {
+    const ys: Array<Item | any> = [];
+    for (; offset < cs.length;) {
+      const res = this.check(cs, offset);
+      if (res === false) {
+        ys.push(cs[offset]);
+        offset++;
       } else {
-        break
+        let item: Item;
+        [item, offset] = res;
+        ys.push(item);
       }
     }
-    return acc;
+    return ys;
   }
 
-  export function map<Char, A, B>(parser: Parser<Char, A>, f: (a: A) => B, name?: string): Parser<Char, B> {
-    class ParserB extends Parser<Char, B> {
-      parse(xs: Char[], offset: number): Array<ParseResult<Char, B>> {
-        return parser.parse(xs, offset).map(res => ({
-          remind: res.remind,
-          offset: res.offset,
-          result: f(res.result)
-        }));
+  /** @return [Item, offset] */
+  protected abstract check(cs: any[], offset: number): [Item, number] | false;
+}
+
+function not_supported(): any {
+  throw new Error('not supported');
+}
+
+namespace Checker {
+  export function create<Item>(name: string,
+                               f: (cs: any[], offset: number) => [Item, number] | false,): Checker<Item> {
+    class NewChecker extends Checker<Item> {
+      public check(cs: any[], offset: number): [Item, number] | false {
+        return f(cs, offset);
       }
     }
 
-    if (name) {
-      name = `map of ${parser.name} to ${name}`
-    } else {
-      name = `map of ${parser.name}`
-    }
-    return new ParserB(`(${name})`);
+    return new NewChecker(name);
   }
 
-  export function thenAll<Char, A1>(p1: Parser<Char, A1>): Parser<Char, [A1]>
-  export function thenAll<Char, A1, A2>(p1: Parser<Char, A1>, p2: Parser<Char, A2>): Parser<Char, [A1, A2]>
-  export function thenAll<Char, A1, A2, A3>(p1: Parser<Char, A1>, p2: Parser<Char, A2>, p3: Parser<Char, A3>): Parser<Char, [A1, A2, A3]>
-  export function thenAll<Char, A1, A2, A3, A4>(p1: Parser<Char, A1>, p2: Parser<Char, A2>, p3: Parser<Char, A3>, p4: Parser<Char, A4>): Parser<Char, [A1, A2, A3, A4]>
-  export function thenAll<Char, A1, A2, A3, A4, A5>(p1: Parser<Char, A1>, p2: Parser<Char, A2>, p3: Parser<Char, A3>, p4: Parser<Char, A4>, p5: Parser<Char, A5>): Parser<Char, [A1, A2, A3, A4, A5]>
-  export function thenAll<Char, A1, A2, A3, A4, A5, A6>(p1: Parser<Char, A1>, p2: Parser<Char, A2>, p3: Parser<Char, A3>, p4: Parser<Char, A4>, p5: Parser<Char, A5>, p6: Parser<Char, A6>): Parser<Char, [A1, A2, A3, A4, A5, A6]>
-  export function thenAll<Char, A1, A2, A3, A4, A5, A6, A7>(p1: Parser<Char, A1>, p2: Parser<Char, A2>, p3: Parser<Char, A3>, p4: Parser<Char, A4>, p5: Parser<Char, A5>, p6: Parser<Char, A6>, p7: Parser<Char, A7>): Parser<Char, [A1, A2, A3, A4, A5, A6, A7]>
-  export function thenAll<Char, A1, A2, A3, A4, A5, A6, A7, A8>(p1: Parser<Char, A1>, p2: Parser<Char, A2>, p3: Parser<Char, A3>, p4: Parser<Char, A4>, p5: Parser<Char, A5>, p6: Parser<Char, A6>, p7: Parser<Char, A7>, p8: Parser<Char, A8>): Parser<Char, [A1, A2, A3, A4, A5, A6, A7, A8]>
-  export function thenAll<Char, A1, A2, A3, A4, A5, A6, A7, A8, A9>(p1: Parser<Char, A1>, p2: Parser<Char, A2>, p3: Parser<Char, A3>, p4: Parser<Char, A4>, p5: Parser<Char, A5>, p6: Parser<Char, A6>, p7: Parser<Char, A7>, p8: Parser<Char, A8>, p9: Parser<Char, A9>): Parser<Char, [A1, A2, A3, A4, A5, A6, A7, A8, A9]>
-
-  export function thenAll<Char, Item>(...parsers: Array<Parser<Char, Item>>): Parser<Char, Item[]> {
-    let acc = map(parsers.shift(), x => [x]);
-    for (; ;) {
-      let parser = parsers.shift();
-      if (parser) {
-        acc = map(then(acc, parser), ([xs, x]) => [...xs, x])
-      } else {
-        break
-      }
-    }
-    return acc;
+  export function then<A, B>(a: Checker<A>, b: Checker<B>): Checker<A | B> {
+    return thenAll<A | B>(a, b);
   }
 
-  export function branch<Char, Item>(predictor: (xs: Char[], offset: number) => boolean,
-                                     thenParser: Parser<Char, Item>,
-                                     elseParser: Parser<Char, Item>): Parser<Char, Item> {
-    class BranchParser extends Parser<Char, Item> {
-      parse(xs: Char[], offset: number): Array<ParseResult<Char, Item>> {
-        if (predictor(xs, offset)) {
-          return thenParser.parse(xs, offset)
-        } else {
-          return elseParser.parse(xs, offset)
+  export function thenAll<A>(...checkers: Array<Checker<A>>): Checker<A> {
+    const name = '(' + checkers.map((x) => x.name).join(' then ') + ')';
+
+    class ThenAllChecker extends Checker<A> {
+      public checkAll(cs: any[], offset: number): Array<A | any> {
+        for (const checker of checkers) {
+          cs = checker.checkAll(cs, offset);
+          offset = 0;
         }
+        return cs;
+      }
+
+      protected check(cs: any[], offset: number): [A, number] | false {
+        return not_supported();
       }
     }
 
-    return new BranchParser(`BranchParser(${thenParser.name} else ${elseParser.name})`)
-  }
-
-  export function isValid<Char, Item>(xs: Char[], offset: number, parser: Parser<Char, Item>): boolean {
-    return parser.parse(xs, offset).length !== 0;
-  }
-
-  export function repeat<Char, Item>(parser: Parser<Char, Item>): Parser<Char, Item[]> {
-    class ParserRepeat extends Parser<Char, Item[]> {
-      parse(xs: Char[], offset: number): Array<ParseResult<Char, Item[]>> {
-        const result: Item[] = [];
-        for (; offset < xs.length;) {
-          if (isValid(xs, offset, parser)) {
-            const res = run(xs, offset, parser);
-            xs = res.remind;
-            offset = res.offset;
-            result.push(res.result)
-          } else {
-            break
-          }
-        }
-        return [{
-          remind: xs,
-          offset,
-          result
-        }];
-      }
-    }
-
-    return new ParserRepeat(`(repeat ${parser.name})`)
-  }
-
-  export function repeatUntil<Char, A, B>(bodyParser: Parser<Char, A>,
-                                          tailParser: Parser<Char, B>): Parser<Char, [A[], B]> {
-    class ParserRepeatUtil extends Parser<Char, [A[], B]> {
-      parse(xs: Char[], offset: number): Array<ParseResult<Char, [A[], B]>> {
-        console.debug(`(${offset}/${xs.length})`, 'repeat', bodyParser.name, 'until', tailParser.name, `[${xs[offset]}]`);
-        const as: A[] = [];
-        for (; offset < xs.length;) {
-          if (isValid(xs, offset, tailParser)) {
-            break;
-          }
-          const resA = run(xs, offset, bodyParser);
-          xs = resA.remind;
-          offset = resA.offset;
-          as.push(resA.result);
-        }
-        const res: ParseResult<Char, [A[], B]>[] = [];
-        tailParser.parse(xs, offset).map(resB => res.push({
-          remind: resB.remind,
-          offset: resB.offset,
-          result: [as, resB.result]
-        }));
-        return res;
-      }
-    }
-
-    return new ParserRepeatUtil(`ParserRepeatUtil(${bodyParser.name} until ${tailParser.name})`)
+    return new ThenAllChecker(name);
   }
 }
-
-class FailureParser extends Parser<any, any> {
-  constructor(public reason: string) {
-    super("FailureParser")
-  }
-
-  parse(xs: any[]): Array<ParseResult<any, any>> {
-    return [];
-  }
-}
-
-class SuccessParser<Char, Item> extends Parser<Char, Item> {
-  constructor(public item: Item) {
-    super(`SuccessParser(${item})`)
-  }
-
-  parse(xs: Char[], offset: number): Array<ParseResult<Char, Item>> {
-    return [{
-      remind: xs,
-      offset,
-      result: this.item,
-    }];
-  }
-
-}
-
-class CharParser<Char extends string> extends Parser<string, Char> {
-  constructor(public char: Char) {
-    super(`CharParser(${char})`);
-  }
-
-  parse(xs: string[], offset: number): Array<ParseResult<string, Char>> {
-    if (xs[offset] === this.char) {
-      return [{
-        remind: xs,
-        offset: offset + 1,
-        result: this.char,
-      }]
-    }
-    return [];
-  }
-}
-
-class AnyCharParser<Char> extends Parser<Char, Char> {
-  constructor() {
-    super('AnyCharParser')
-  }
-
-  parse(xs: Char[], offset: number): Array<ParseResult<Char, Char>> {
-    if (offset < xs.length) {
-      return [{
-        remind: xs,
-        offset: offset + 1,
-        result: xs[offset],
-      }]
-    }
-    return []
-  }
-}
-
-const anyCharParser = new AnyCharParser<any>();
 
 function isBetween<A>(l: A, m: A, r: A): boolean {
   return l <= m && m <= r;
 }
 
-function isStopChar(c: string): boolean {
+function isEngChar(c: string) {
+  return isBetween('a', c, 'z') || isBetween('A', c, 'Z');
+}
+
+function isNumChar(c: string) {
+  return isBetween('0', c, '9');
+}
+
+function isWordHead(c: string) {
+  return c === '_' || isEngChar(c);
+}
+
+function isWordBody(c: string) {
+  return isWordHead(c) || isNumChar(c);
+}
+
+function isStopWord(c: string) {
   return !(
-    c === '_'
-    || isBetween('a', c, 'z')
-    || isBetween('A', c, 'Z')
-    || isBetween('0', c, '9')
+    c === '_' ||
+    isBetween('0', c, '9') ||
+    isBetween('a', c, 'z') ||
+    isBetween('A', c, 'Z')
   );
 }
 
-class StopCharParser extends Parser<string, void> {
+function isSpace(c: string) {
+  switch (c) {
+    case ' ':
+    case '\n':
+    case '\r':
+    case '\t':
+      return true;
+    default:
+      return false;
+  }
+}
+
+const spaceChecker = Checker.create<Space>('spaceChecker', (cs, offset) => mapTakeWhile(cs, offset, c => isSpace(c), ss => new Space(ss.join(''))));
+/**@deprecated*/
+const symChecker = Checker.create<Sym>('symChecker', (cs, offset) => {
+  let c = cs[offset];
+  switch (c) {
+    case '<':
+    case '>':
+    case '{':
+    case '}':
+    case ';':
+      return [new Sym(c), offset + 1];
+    default:
+      return false;
+  }
+});
+
+function isSym(s: string, o) {
+  return (o instanceof Sym) && o.value === s;
+}
+
+function startsWith<A>(cs: A[], offset: number, pattern: string | A[], eq = (a, b) => a === b): boolean {
+  if (typeof pattern === 'string') {
+    pattern = pattern.split('') as any;
+  }
+  for (let i = 0; i < pattern.length; i++) {
+    if (!eq(cs[offset + i], pattern[i])) {
+      return false;
+    }
+  }
+  let next = cs[offset + pattern.length];
+  return isStopWord(next as any);
+}
+
+class SingleLineCommentChecker extends Checker<SingleLineComment> {
   constructor() {
-    super('StopCharParser ')
+    super('SingleLineCommentChecker ');
   }
 
-  parse(xs: string[], offset: number): Array<ParseResult<string, void>> {
-    if (Parser.isValid(xs, offset, wordBodyParser)) {
-      return []
-    }
-    return [{
-      remind: xs,
-      offset,
-      result: void 0
-    }]
-  }
-}
-
-class CharSeqParser<Str extends string> extends Parser<string, Str> {
-  constructor(public str: Str) {
-    super(`CharSeqParser(${str})`)
-  }
-
-  parse(xs: string[], offset: number): Array<ParseResult<string, Str>> {
-    // console.debug(this.name, {
-    //   offset,
-    //   c: xs[offset],
-    //   name: this.name,
-    // });
-    for (let i = 0; i < this.str.length; i++) {
-      if (xs[offset + i] !== this.str[i]) {
-        return [];
-      }
-    }
-    offset += this.str.length;
-    if (!isStopChar(xs[offset])) {
-      console.debug(`not stop char: '${xs[offset]}'`);
-      if(config.dev){
-        throw new Error("check here")
-      }
-      return [];
-    }
-    return [{
-      remind: xs,
-      offset: offset,
-      result: this.str,
-    }]
-  }
-}
-
-class IntegerParser extends Parser<string, number> {
-  constructor() {
-    super("IntegerParser")
-  }
-
-  static isDigit(c: string) {
-    switch (c) {
-      case '0':
-      case '1':
-      case '2':
-      case '3':
-      case '4':
-      case '5':
-      case '6':
-      case '7':
-      case '8':
-      case '9':
-        return true;
-      default:
-        return false;
-    }
-  }
-
-  static toDigit(c: string) {
-    return c.charCodeAt(0) - 48;
-  }
-
-  parse(xs: string[], offset: number): Array<ParseResult<string, number>> {
-    let c = xs[offset];
-    if (!IntegerParser.isDigit(c)) {
-      return [];
-    }
-    let acc = IntegerParser.toDigit(c);
-    offset++;
-    for (; offset < xs.length;) {
-      let c = xs[offset];
-      if (!IntegerParser.isDigit(c)) {
-        break;
-      }
-      acc = acc * 10 + IntegerParser.toDigit(c);
-      offset++;
-    }
-    return [{
-      remind: xs,
-      offset,
-      result: acc
-    }]
-  }
-}
-
-const integerParser = new IntegerParser();
-
-class DigitParser extends Parser<string, string> {
-  constructor() {
-    super("DigitParser ")
-  }
-
-  parse(xs: string[], offset: number): Array<ParseResult<string, string>> {
-    let c = xs[offset];
-    if ('0' <= c && c <= '9') {
-      return [{
-        remind: xs,
-        offset: offset + 1,
-        result: c
-      }]
-    } else {
-      return []
-    }
-  }
-}
-
-const digitParser = new DigitParser();
-
-class EngCharParser extends Parser<string, string> {
-  constructor() {
-    super("EngCharParser ")
-  }
-
-  parse(xs: string[], offset: number): Array<ParseResult<string, string>> {
-    let c = xs[offset];
-    if (!c) {
-      return []
-    }
-    const C = c.toUpperCase();
-    if (!('A' <= C && C <= 'Z')) {
-      return []
-    }
-    return [{
-      remind: xs,
-      offset: offset + 1,
-      result: c
-    }];
-  }
-}
-
-const engCharParser = new EngCharParser();
-
-const wordHeadParser = Parser.orAll(
-  engCharParser,
-  new CharParser('_'),
-);
-wordHeadParser.name = 'wordHeadParser';
-const wordBodyParser = Parser.repeat(Parser.or(wordHeadParser, digitParser));
-wordBodyParser.name = 'wordBodyParser';
-const wordParser: Parser<string, string> = Parser.map(Parser.or(
-  Parser.then(wordHeadParser, wordBodyParser),
-  wordHeadParser
-), ss => iolist_to_string(ss as iolist));
-wordParser.name = 'wordParser';
-
-const spaceCharParser = Parser.orAll(
-  new CharParser(' '),
-  new CharParser('\n'),
-  new CharParser('\r'),
-  new CharParser('\t'),
-);
-spaceCharParser.name = 'spaceCharParser';
-// at least one space
-const spaceParser = Parser.orAll(
-  spaceCharParser,
-  Parser.map(Parser.repeat(spaceCharParser), xs => iolist_to_string(xs)),
-);
-spaceParser.name = 'spaceParser';
-const spaceTermParser = Parser.map(
-  spaceParser,
-  s => new Space(s.length),
-);
-spaceTermParser.name = 'spaceTermParser';
-
-const maybeSpaceParser = Parser.or(
-  spaceParser,
-  new SuccessParser('')
-);
-maybeSpaceParser.name = 'maybeSpaceParser';
-
-interface TypeName {
-  type: Type
-  name: Name
-}
-
-const ordNumTypeParser = Parser.orAll(
-  new CharSeqParser('short'),
-  new CharSeqParser('long long'),
-  new CharSeqParser('long'),
-);
-ordNumTypeParser.name = 'ordNumTypeParser';
-const realNumTypeParser = Parser.orAll(
-  new CharSeqParser('float'),
-  new CharSeqParser('double'),
-  new CharSeqParser('fixed'),
-);
-realNumTypeParser.name = 'realNumTypeParser';
-const numTypeParser = Parser.map(Parser.orAll(
-  ordNumTypeParser,
-  Parser.map(Parser.then(new CharSeqParser('unsigned'), ordNumTypeParser), ([a, b]) => a + b),
-  realNumTypeParser
-  ),
-  num => new NumberType(num)
-);
-numTypeParser.name = 'numTypeParser';
-
-const fixStringTypeParser = Parser.map(
-  Parser.thenAll(
-    new CharSeqParser('string'),
-    maybeSpaceParser,
-    new CharParser('<'),
-    maybeSpaceParser,
-    integerParser,
-    maybeSpaceParser,
-    new CharParser('>'),
-    maybeSpaceParser,
-  ),
-  ([_s, _s1, _c1, _s2, int]) => new FixString(int)
-);
-fixStringTypeParser.name = 'fixStringTypeParser';
-const varStringTypeParser = Parser.map(
-  new CharSeqParser('string'),
-  s => new VarString()
-);
-varStringTypeParser.name = 'varStringTypeParser';
-
-const stringTypeParser = Parser.orAll(
-  fixStringTypeParser,
-  varStringTypeParser,
-);
-stringTypeParser.name = 'stringTypeParser';
-
-const typeBodyParser = Parser.orAll(numTypeParser,
-  stringTypeParser,
-  Parser.map(wordParser, s => new Type(s)),
-);
-typeBodyParser.name = 'typeBodyParser';
-
-const sequenceTypeParser = Parser.map(
-  Parser.thenAll(
-    new CharSeqParser('sequence'),
-    new CharParser('<'),
-    typeBodyParser,
-    new CharParser('>'),
-  ),
-  ([_s, _c1, body]) => new Sequence(body)
-);
-sequenceTypeParser.name = 'sequenceTypeParser';
-
-const typeParser = Parser.or(
-  sequenceTypeParser,
-  typeBodyParser,
-);
-typeParser.name = 'typeParser';
-const typeDefParser = Parser.map(
-  Parser.thenAll(
-    new CharSeqParser('typedef'),
-    spaceParser,
-    typeParser,
-    spaceParser,
-    wordParser,
-    spaceParser,
-    new CharParser(';')
-  ),
-  ([_t1, _s1, type, _s2, name]) => {
-    // const typeTerm = new Type(iolist_to_string(type as iolist));
-    // const nameTerm = new Name(iolist_to_string(name as iolist));
-    return new TypeDef(
-      type,
-      iolist_to_string(name as iolist),
-    )
-  }
-);
-typeDefParser.name = 'typeDefParser';
-
-class SingleLineCommentParser extends Parser<string, SingleLineComment> {
-  constructor() {
-    super("SingleLineCommentParser")
-  }
-
-  parse(xs: string[], offset: number): Array<ParseResult<string, SingleLineComment>> {
-    if (!(xs[offset] === '/' && xs[offset + 1] === '/')) {
-      return []
+  public check(cs: string[],
+               offset: number,): [SingleLineComment, number] | false {
+    if (!startsWith(cs, offset, '//')) {
+      return false;
     }
     offset += 2;
-    let acc = '';
-    for (; offset < xs.length;) {
-      let c = xs[offset];
-      if (c === '\n') {
-        offset++;
-        break;
-      } else {
-        acc += c;
-        offset++;
-      }
+    let end = cs.indexOf('\n', offset);
+    if (end === -1) {
+      end = cs.length;
     }
-    return [{
-      remind: xs,
-      offset,
-      result: new SingleLineComment(acc)
-    }]
+    const comment = new SingleLineComment(
+      iolist_to_string(cs.slice(offset, end)),
+    );
+    return [comment, end];
   }
 }
 
-const singleLineCommentParser = new SingleLineCommentParser();
-singleLineCommentParser.name = 'singleLineCommentParser';
-
-class MultiLineCommentParser extends Parser<string, MultiLineComment> {
+class MultiLineChecker extends Checker<MultiLineComment> {
   constructor() {
-    super("MultiLineCommentParser ")
+    super('MultiLineChecker ');
   }
 
-  parse(xs: string[], offset: number): Array<ParseResult<string, MultiLineComment>> {
-    if (!(xs[offset] === '/' && xs[offset + 1] === '*')) {
-      return []
+  public findEnd(cs: string[], offset: number) {
+    for (; offset < cs.length;) {
+      const idx = cs.indexOf('*', offset);
+      if (idx === -1) {
+        return -1;
+      }
+      if (cs[idx + 1] === '/') {
+        return idx - 1;
+      }
+      offset = idx + 1;
+    }
+    return -1;
+  }
+
+  public check(cs: string[],
+               offset: number,): [MultiLineComment, number] | false {
+    if (!startsWith(cs, offset, '/*')) {
+      return false;
     }
     offset += 2;
-    let acc = '';
-    for (; offset < xs.length;) {
-      let c = xs[offset];
-      if (c === '*' && xs[offset + 1] === '/') {
-        offset += 2;
-        break
-      } else {
-        acc += c;
-        offset++;
-      }
+    const end = this.findEnd(cs, offset);
+    if (end === -1) {
+      return false;
     }
-    return [{
-      remind: xs,
-      offset,
-      result: new MultiLineComment(acc)
-    }]
+    const comment = new MultiLineComment(
+      iolist_to_string(cs.slice(offset, end)),
+    );
+    return [comment, end + 2];
   }
 }
 
-const multiLineCommentParser = new MultiLineCommentParser();
-multiLineCommentParser.name = 'multiLineCommentParser';
-const commentParser = Parser.or(singleLineCommentParser, multiLineCommentParser);
-commentParser.name = 'commentParser';
-
-class NameParser extends Parser<string, Name> {
-  constructor() {
-    super("NameParser ")
+class Block extends Expr {
+  constructor(public body: Expr[]) {
+    super();
   }
 
-  parse(xs: string[], offset: number): Array<ParseResult<string, Name>> {
+  public toIDLString(): iolist {
     return undefined;
   }
 }
 
-class ModuleParser extends Parser<string, Module> {
+class BlockChecker extends Checker<Block> {
   constructor() {
-    super("ModuleParser ")
+    super('BlockChecker');
   }
 
-  parse(xs: string[], offset: number): Array<ParseResult<string, Module>> {
-
-    const headParser = Parser.map(
-      Parser.thenAll(
-        new CharSeqParser('module'),
-        spaceParser,
-        wordParser,
-        maybeSpaceParser,
-        new CharParser('{'),
-      ),
-      ([_module, _s1, name]) => ({name})
-    );
-
-    const bodyParser = exprParser;
-
-    // todo support the comments
-    const tailParser = Parser.thenAll(
-      new CharParser('}'),
-      maybeSpaceParser,
-      new CharParser(';'),
-    );
-
-    const parser = Parser.map(
-      Parser.then(
-        headParser,
-        Parser.repeatUntil(bodyParser, tailParser)
-      ),
-      ([head, [bodies]]) => new Module(head.name, bodies)
-    );
-
-    return parser.parse(xs, offset);
+  public check(cs: any[], offset: number): [Block, number] | false {
+    return undefined;
   }
-}
 
-const moduleParser = new ModuleParser();
-
-
-const structHeadParser = Parser.map(
-  Parser.thenAll(
-    new CharSeqParser('struct'),
-    spaceParser,
-    wordParser,
-    maybeSpaceParser,
-    new CharParser('{'),
-  ),
-  ([_struct, _s1, name]) => ({name})
-);
-structHeadParser.name = 'headParser';
-
-const structFieldParser = Parser.map(
-  Parser.thenAll(
-    typeParser,
-    spaceParser,
-    wordParser,
-    maybeSpaceParser,
-    new CharParser(';')
-  ),
-  ([type, _s1, name]) => ({type, name: new Name(name)} as TypeName)
-);
-structFieldParser.name = 'structFieldParser';
-
-// TODO support comment
-const structBodyItemParser = Parser.orAll(
-  Parser.map(structFieldParser, s => [s] as TypeName[]),
-  Parser.map(commentParser, () => [] as TypeName[]),
-  Parser.map(spaceParser, () => [] as TypeName[]),
-);
-structBodyItemParser.name = 'structBodyItemParser';
-
-const structBodyParser = structBodyItemParser;
-/*
-const structBodyParser =
-  Parser.map(
-    Parser.repeat(structBodyItemParser),
-    xss => {
-      const res: TypeName[] = [];
-      xss.forEach(xs => xs.forEach(x => res.push(x)));
+  public checkAll(cs: any[], offset: number): Array<Block | any> {
+    for (; ;) {
+      const start = cs.lastIndexOf('{');
+      if (start === -1) {
+        return cs;
+      }
+      const end = cs.indexOf('}', start);
+      if (end === -1) {
+        throw new Error('Block is not closed, `}` not found.');
+      }
+      const body = cs.slice(start + 1, end);
+      const pre = cs.slice(0, start);
+      const post = cs.slice(end + 1, cs.length);
+      const res = [];
+      res.push(...pre);
+      res.push(new Block(exprChecker.checkAll(body, 0)));
+      res.push(...post);
       return res;
     }
-  );
-  */
-structBodyParser.name = 'structBodyParser';
-
-const structTailParser = Parser.thenAll(
-  new CharParser('}'),
-  maybeSpaceParser,
-  new CharParser(';'),
-);
-structTailParser.name = 'structTailParser';
-
-const structParser = Parser.map(
-  Parser.thenAll(
-    structHeadParser,
-    Parser.repeatUntil(structBodyParser, structTailParser)
-  ),
-  ([head, [bodies]]) => {
-    const bs_: TypeName[] = [];
-    bodies.forEach(bs => bs.forEach(b => bs_.push(b)));
-    return new Struct(head.name, bs_);
-  }
-);
-structParser.name = 'structParser';
-
-const defineParser = Parser.map(
-  Parser.thenAll(
-    new CharSeqParser('#define'),
-    spaceParser,
-    wordParser,
-    spaceParser,
-  )
-  , ([_define, _s, name]) => new Define(name)
-);
-defineParser.name = 'defineParser';
-
-class IfNDefParser extends Parser<string, IfNDef> {
-  constructor() {
-    super('IfNDefParser ')
-  }
-
-  parse(xs: string[], offset: number): Array<ParseResult<string, IfNDef>> {
-    const headParser = Parser.map(
-      Parser.thenAll(
-        new CharSeqParser('#ifndef'),
-        spaceParser,
-        wordParser,
-      ),
-      ([_ifndef, _s, name]) => ({name}));
-    const bodyParser = exprParser;
-    const tailParser = new CharSeqParser('#endif');
-    const parser = Parser.map(
-      Parser.then(
-        headParser,
-        Parser.repeatUntil(bodyParser, tailParser)
-      ),
-      ([head, [bodies]]) => new IfNDef(head.name, bodies));
-    return parser.parse(xs, offset);
   }
 }
 
-const ifNDefParser = new IfNDefParser();
-
-const includeParser = Parser.map(
-  Parser.thenAll(
-    new CharSeqParser('#include'),
-    spaceParser,
-    new CharParser('"'),
-    Parser.repeatUntil(anyCharParser, new CharParser('"')),
-    spaceParser,
-  ),
-  ([_define, _s, _sym, name_iolist]) => new Include(iolist_to_string(name_iolist as iolist))
-  )
-;
-includeParser.name = 'includeParser';
-
-function startsWith(xs: string[], offset: number, target: string) {
-  for (let i = 0; i < target.length; i++) {
-    if (xs[offset + i] !== target[i]) {
-      return false
-    }
+class ModuleChecker extends Checker<Module> {
+  constructor() {
+    super('ModuleChecker');
   }
-  return true;
+
+  public check(cs: any[], offset: number): [Module, number] | false {
+    if (startsWith(cs, offset, 'module')) {
+      offset += 'module'.length;
+      const end = cs.indexOf('{', offset);
+      if (end === -1) {
+        throw new Error('Failed to parse module, `{` not found.');
+      }
+      const name = cs
+        .slice(offset, end - 1)
+        .join('')
+        .trim();
+      offset = end + 1;
+    }
+    return undefined;
+  }
 }
 
-class ExprParser extends Parser<string, Expr> {
+function takeWhile<A>(xs: A[],
+                      offset: number,
+                      p: (a: A) => boolean,): [A[], number] | false {
+  const yx: A[] = [];
+  for (; offset < xs.length;) {
+    if (p(xs[offset])) {
+      yx.push(xs[offset]);
+      offset++;
+    } else {
+      break;
+    }
+  }
+  if (yx.length === 0) {
+    return false;
+  } else {
+    return [yx, offset];
+  }
+}
+
+function mapTakeWhile<A, B>(xs: A[], offset: number, p: (a: A) => boolean, m: (xs: A[]) => B): [B, number] | false {
+  let res = takeWhile(xs, offset, p);
+  if (res === false) {
+    return false
+  }
+  let ys: A[];
+  [ys, offset] = res;
+  return [m(ys), offset];
+}
+
+class CodeChecker extends Checker<Expr> {
   constructor() {
-    super("ExprParser")
+    super('CodeChecker');
   }
 
-  parse(xs: string[], offset: number): Array<ParseResult<string, Expr>> {
-    console.debug({
-      c: xs[offset],
-      c1: xs[offset + 1],
-      c2: xs[offset + 2],
-    });
-    if (startsWith(xs, offset, 'module')) {
-      return moduleParser.parse(xs, offset);
+  public check(cs: string[], offset: number): [Expr, number] | false {
+    const c = cs[offset];
+    if (typeof c === 'string' && false) {
+      console.error({
+        offset,
+        current: c,
+        line: cs.slice(offset, cs.indexOf('\n', offset)).join(''),
+      });
+      throw new Error('unknown pattern');
     }
-    if (startsWith(xs, offset, 'typedef')) {
-      return typeDefParser.parse(xs, offset);
+    if (typeof c === 'string') {
+      return [new Sym(c), offset + 1];
+    } else {
+      return false;
     }
-    if (startsWith(xs, offset, 'struct')) {
-      return structParser.parse(xs, offset)
+  }
+}
+
+function genSeqChecker<Item>(name: string, seq: string | any[], eq = (a, b) => a === b): Checker<void> {
+  if (typeof seq === 'string') {
+    seq = seq.split('');
+  }
+  return Checker.create(name, (cs, offset) => {
+    startsWith(cs, offset, seq)
+    for (let i = 0; i < seq.length; i++) {
+      if (!eq(cs[offset + i], seq[i])) {
+        return false;
+      }
     }
-    if (startsWith(xs, offset, '//')) {
-      return singleLineCommentParser.parse(xs, offset)
+    return [void 0, offset + seq.length]
+  })
+}
+
+class Word extends Expr {
+  constructor(public value: string) {
+    super()
+  }
+
+  toIDLString(): iolist {
+    return this.value;
+  }
+}
+
+const wordChecker = Checker.create('wordChecker', (cs, offset) => {
+  let acc = cs[offset];
+  if (!isWordHead(acc)) {
+    return false;
+  }
+  offset++;
+  for (; ;) {
+    let c = cs[offset];
+    if (isWordBody(c)) {
+      acc += c;
+      offset++;
+    } else {
+      break
     }
-    if (startsWith(xs, offset, '/*')) {
-      return multiLineCommentParser.parse(xs, offset)
+  }
+  return [new Word(acc), offset]
+});
+
+function isWord(s: string, o) {
+  return (o instanceof Word) && o.value === s;
+}
+
+function takeBodyFunc<A>(p: (a: A) => boolean, cs: A[], offset: number, body: any[]): [A, number] {
+  let last;
+  for (; offset < cs.length;) {
+    let c = cs[offset];
+    last = c;
+    body.push(c);
+    if ((c instanceof Space) || (c instanceof Comment)) {
+      offset++;
+      continue;
     }
-    if (startsWith(xs, offset, '#ifndef')) {
-      return ifNDefParser.parse(xs, offset)
+    if (p(c)) {
+      return [c, offset + 1];
     }
-    if (Parser.isValid(xs, offset, spaceTermParser)) {
-      return spaceTermParser.parse(xs, offset)
-    }
+    offset++
+  }
+  console.error({
+    offset,
+    last,
+    body,
+  });
+  throw new Error('unexpected body item')
+}
+
+function takeBodyForClass<A>(targetClass, cs: A[], offset: number, body: any[]): [A, number] {
+  try {
+    return takeBodyFunc(a => a instanceof targetClass, cs, offset, body);
+  } catch (e) {
     console.error({
-      offset,
-      char: xs[offset],
+      targetClass: targetClass.name,
     });
-    throw new Error('not impl pattern');
+    throw e;
   }
 }
 
-// const exprParser = new ExprParser();
-const exprParser = Parser.orAll(
-  defineParser,
-  includeParser,
-  ifNDefParser,
-  moduleParser,
-  typeDefParser,
-  structParser,
-  singleLineCommentParser,
-  multiLineCommentParser,
-  spaceTermParser,
+function takeBodyForSym(sym: string, cs: any[], offset: number, body: any[]): [Sym, number] {
+  let s: string;
+  [s, offset] = takeBodyFunc(o => (o instanceof Sym && o.value === sym) || o as any === sym, cs, offset, body);
+  s = body.pop();
+  const symbol = new Sym(s);
+  body.push(symbol);
+  return [symbol, offset]
+}
+
+class StructBody extends Expr {
+  constructor(public fields: TypeName[], public body: Expr[]) {
+    super()
+  }
+
+  toIDLString(): iolist {
+    return this.body.map(x => x.toIDLString())as iolist;
+  }
+}
+
+const structFieldChecker = Checker.create('structFieldChecker', (cs, offset) => {
+  const body: Expr[] = [];
+  const fields: TypeName[] = [];
+
+  for (; offset < cs.length;) {
+    const c = cs[offset];
+    body.push(c);
+    if ((c instanceof Space) || (c instanceof Comment)) {
+      offset++;
+      continue;
+    }
+    /**
+     * name: last Word
+     * type: other Words
+     * */
+    let typeNameBody: Expr[] = [];
+    let sym: Sym;
+    [sym, offset] = takeBodyForSym(';', cs, offset, typeNameBody);
+
+    let words = typeNameBody.filter(x => x instanceof Word);
+    if (words.length < 2) {
+      console.error({
+        offset,
+        c,
+        words,
+      });
+      throw new Error('incomplete typename')
+    }
+    let name = words.pop();
+    let type = words;
+    console.log({
+      name,
+      type,
+    });
+    // TODO
+    throw new Error('test here')
+  }
+
+  return [new StructBody(fields, body), offset];
+});
+
+const structChecker = Checker.create('structChecker', (cs, offset) => {
+  const body: Expr[] = [];
+  if (!isWord('struct', cs[offset])) {
+    return false;
+  }
+  body.push(cs[offset]);
+  offset++;
+
+  /* take name */
+  let name: Word;
+  [name, offset] = takeBodyForClass(Word, cs, offset, body);
+
+  /* take block */
+  let block: Block;
+  [block, offset] = takeBodyForClass(Block, cs, offset, body);
+
+  let fields = structFieldChecker.checkAll(block.body, 0);
+  console.log('fields:', inspect(fields));
+
+  /* take ';' */
+  let sym: Sym;
+  [sym, offset] = takeBodyForSym(';', cs, offset, body);
+
+  return [new Struct(name.value, fields, body), offset]
+});
+
+const exprChecker = Checker.thenAll(
+  new MultiLineChecker(),
+  new SingleLineCommentChecker(),
+  spaceChecker,
+  wordChecker,
+  // symChecker,
+  new BlockChecker(),
+  structChecker,
+  new CodeChecker(),
 );
-exprParser.name = 'exprParser';
-const fileParser = Parser.repeat(exprParser);
-fileParser.name = 'fileParser';
 
 export async function parseIDLFile(filename: string): Promise<Expr[]> {
   if (!filename.endsWith('.idl')) {
     console.warn('input file should be .idl', {filename});
   }
   console.log(`reading ${filename}...`);
-  let parseResults: ParseResult<string, Expr[]>[];
+  let exprs: Expr[];
   if (config.dev) {
-    let text = await readFile(filename);
-    let ss = text.split('');
+    const text = await readFile(filename);
+    const ss = text.split('');
     for (let i = 0; i < ss.length; i++) {
       console.debug(i + ': ' + JSON.stringify(ss[i]));
     }
-    parseResults = fileParser.parse(ss, 0);
+    exprs = exprChecker.checkAll(ss, 0);
   } else {
-    parseResults = fileParser.parse((await readFile(filename)).split(''), 0);
+    exprs = exprChecker.checkAll((await readFile(filename)).split(''), 0);
   }
-  if (parseResults.length !== 1) {
-    console.error({parseResults});
-    throw new Error(`Failed to parse file ${filename}`)
-  }
-  let res = parseResults[0];
-  if (res.offset != res.remind.length) {
-    console.error({
-      len: res.remind.length,
-      offset: res.offset,
-      current: res.remind[res.offset],
-      filename,
-    });
-    throw new Error(`File ${filename} is not fully parsed`);
-  }
-  return res.result;
+  return exprs;
 }
