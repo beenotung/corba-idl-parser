@@ -1,8 +1,9 @@
 import {
-  Expr, FixString, Module, MultiLineComment, Name, NumberType, Sequence, SingleLineComment, Space, Struct, Type,
-  TypeDef, VarString
+  Define, Expr, FixString, IfNDef, Include, Module, MultiLineComment, Name, NumberType, Sequence,
+  SingleLineComment, Space, Struct, Type, TypeDef, VarString
 } from "./term";
 import {iolist, iolist_to_string, readFile} from "./io";
+import {config} from "./config";
 
 interface ParseResult<Char, Item> {
   remind: Char[];
@@ -244,20 +245,82 @@ class CharParser<Char extends string> extends Parser<string, Char> {
   }
 }
 
+class AnyCharParser<Char> extends Parser<Char, Char> {
+  constructor() {
+    super('AnyCharParser')
+  }
+
+  parse(xs: Char[], offset: number): Array<ParseResult<Char, Char>> {
+    if (offset < xs.length) {
+      return [{
+        remind: xs,
+        offset: offset + 1,
+        result: xs[offset],
+      }]
+    }
+    return []
+  }
+}
+
+const anyCharParser = new AnyCharParser<any>();
+
+function isBetween<A>(l: A, m: A, r: A): boolean {
+  return l <= m && m <= r;
+}
+
+function isStopChar(c: string): boolean {
+  return !(
+    c === '_'
+    || isBetween('a', c, 'z')
+    || isBetween('A', c, 'Z')
+    || isBetween('0', c, '9')
+  );
+}
+
+class StopCharParser extends Parser<string, void> {
+  constructor() {
+    super('StopCharParser ')
+  }
+
+  parse(xs: string[], offset: number): Array<ParseResult<string, void>> {
+    if (Parser.isValid(xs, offset, wordBodyParser)) {
+      return []
+    }
+    return [{
+      remind: xs,
+      offset,
+      result: void 0
+    }]
+  }
+}
+
 class CharSeqParser<Str extends string> extends Parser<string, Str> {
   constructor(public str: Str) {
     super(`CharSeqParser(${str})`)
   }
 
   parse(xs: string[], offset: number): Array<ParseResult<string, Str>> {
+    // console.debug(this.name, {
+    //   offset,
+    //   c: xs[offset],
+    //   name: this.name,
+    // });
     for (let i = 0; i < this.str.length; i++) {
       if (xs[offset + i] !== this.str[i]) {
         return [];
       }
     }
+    offset += this.str.length;
+    if (!isStopChar(xs[offset])) {
+      console.debug(`not stop char: '${xs[offset]}'`);
+      if(config.dev){
+        throw new Error("check here")
+      }
+      return [];
+    }
     return [{
       remind: xs,
-      offset: offset + this.str.length,
+      offset: offset,
       result: this.str,
     }]
   }
@@ -417,7 +480,7 @@ const realNumTypeParser = Parser.orAll(
 realNumTypeParser.name = 'realNumTypeParser';
 const numTypeParser = Parser.map(Parser.orAll(
   ordNumTypeParser,
-  Parser.map(Parser.then(new CharSeqParser('unsigned '), ordNumTypeParser), ([a, b]) => a + b),
+  Parser.map(Parser.then(new CharSeqParser('unsigned'), ordNumTypeParser), ([a, b]) => a + b),
   realNumTypeParser
   ),
   num => new NumberType(num)
@@ -677,6 +740,56 @@ const structParser = Parser.map(
 );
 structParser.name = 'structParser';
 
+const defineParser = Parser.map(
+  Parser.thenAll(
+    new CharSeqParser('#define'),
+    spaceParser,
+    wordParser,
+    spaceParser,
+  )
+  , ([_define, _s, name]) => new Define(name)
+);
+defineParser.name = 'defineParser';
+
+class IfNDefParser extends Parser<string, IfNDef> {
+  constructor() {
+    super('IfNDefParser ')
+  }
+
+  parse(xs: string[], offset: number): Array<ParseResult<string, IfNDef>> {
+    const headParser = Parser.map(
+      Parser.thenAll(
+        new CharSeqParser('#ifndef'),
+        spaceParser,
+        wordParser,
+      ),
+      ([_ifndef, _s, name]) => ({name}));
+    const bodyParser = exprParser;
+    const tailParser = new CharSeqParser('#endif');
+    const parser = Parser.map(
+      Parser.then(
+        headParser,
+        Parser.repeatUntil(bodyParser, tailParser)
+      ),
+      ([head, [bodies]]) => new IfNDef(head.name, bodies));
+    return parser.parse(xs, offset);
+  }
+}
+
+const ifNDefParser = new IfNDefParser();
+
+const includeParser = Parser.map(
+  Parser.thenAll(
+    new CharSeqParser('#include'),
+    spaceParser,
+    new CharParser('"'),
+    Parser.repeatUntil(anyCharParser, new CharParser('"')),
+    spaceParser,
+  ),
+  ([_define, _s, _sym, name_iolist]) => new Include(iolist_to_string(name_iolist as iolist))
+  )
+;
+includeParser.name = 'includeParser';
 
 function startsWith(xs: string[], offset: number, target: string) {
   for (let i = 0; i < target.length; i++) {
@@ -693,6 +806,11 @@ class ExprParser extends Parser<string, Expr> {
   }
 
   parse(xs: string[], offset: number): Array<ParseResult<string, Expr>> {
+    console.debug({
+      c: xs[offset],
+      c1: xs[offset + 1],
+      c2: xs[offset + 2],
+    });
     if (startsWith(xs, offset, 'module')) {
       return moduleParser.parse(xs, offset);
     }
@@ -708,6 +826,9 @@ class ExprParser extends Parser<string, Expr> {
     if (startsWith(xs, offset, '/*')) {
       return multiLineCommentParser.parse(xs, offset)
     }
+    if (startsWith(xs, offset, '#ifndef')) {
+      return ifNDefParser.parse(xs, offset)
+    }
     if (Parser.isValid(xs, offset, spaceTermParser)) {
       return spaceTermParser.parse(xs, offset)
     }
@@ -719,17 +840,51 @@ class ExprParser extends Parser<string, Expr> {
   }
 }
 
-const exprParser = new ExprParser();
+// const exprParser = new ExprParser();
+const exprParser = Parser.orAll(
+  defineParser,
+  includeParser,
+  ifNDefParser,
+  moduleParser,
+  typeDefParser,
+  structParser,
+  singleLineCommentParser,
+  multiLineCommentParser,
+  spaceTermParser,
+);
+exprParser.name = 'exprParser';
+const fileParser = Parser.repeat(exprParser);
+fileParser.name = 'fileParser';
 
-export async function parseFile(filename: string) {
+export async function parseIDLFile(filename: string): Promise<Expr[]> {
   if (!filename.endsWith('.idl')) {
     console.warn('input file should be .idl', {filename});
   }
   console.log(`reading ${filename}...`);
-  let text = await readFile(filename);
-  let ss = text.split('');
-  for (let i = 0; i < ss.length; i++) {
-    console.log(i + ': ' + JSON.stringify(ss[i]));
+  let parseResults: ParseResult<string, Expr[]>[];
+  if (config.dev) {
+    let text = await readFile(filename);
+    let ss = text.split('');
+    for (let i = 0; i < ss.length; i++) {
+      console.debug(i + ': ' + JSON.stringify(ss[i]));
+    }
+    parseResults = fileParser.parse(ss, 0);
+  } else {
+    parseResults = fileParser.parse((await readFile(filename)).split(''), 0);
   }
-  return exprParser.parse(ss, 0);
+  if (parseResults.length !== 1) {
+    console.error({parseResults});
+    throw new Error(`Failed to parse file ${filename}`)
+  }
+  let res = parseResults[0];
+  if (res.offset != res.remind.length) {
+    console.error({
+      len: res.remind.length,
+      offset: res.offset,
+      current: res.remind[res.offset],
+      filename,
+    });
+    throw new Error(`File ${filename} is not fully parsed`);
+  }
+  return res.result;
 }

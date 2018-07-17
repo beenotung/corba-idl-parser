@@ -156,3 +156,52 @@ export class Struct extends Expr {
     ] as iolist
   }
 }
+
+export abstract class Macro extends Expr {
+}
+
+export class Define extends Macro {
+  constructor(public name: string) {
+    super()
+  }
+
+  toIDLString() {
+    return [
+      '#define ',
+      this.name,
+      '\n',
+    ]
+  }
+}
+
+export class IfNDef extends Macro {
+  constructor(public name: string, public body: Expr[]) {
+    super()
+  }
+
+  toIDLString(): iolist {
+    return [
+      '#ifndef ',
+      this.name,
+      '\n',
+      this.body.map(x => x.toIDLString()),
+      '\n',
+      '#endif',
+      '\n',
+    ] as iolist
+  }
+}
+
+export class Include extends Macro {
+  constructor(public filename: string) {
+    super()
+  }
+
+  toIDLString() {
+    return [
+      '#include ',
+      this.filename,
+      '\n',
+    ]
+  }
+}

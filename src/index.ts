@@ -1,4 +1,5 @@
-import {parseFile} from "./parser";
+import {parseIDLFile} from "./parser";
+import {config} from "./config";
 import {debugFormat} from "./debug";
 
 async function main() {
@@ -7,12 +8,14 @@ async function main() {
     return process.exit(1);
   }
   const filename = process.argv[2];
-  const res = await parseFile(filename);
-  console.debug(res);
-  const expr = res[0].result;
-  console.debug(JSON.stringify(expr));
-  console.debug(expr.toIDLString());
-  console.debug(debugFormat(expr.toIDLString()));
+  const exprs = await parseIDLFile(filename);
+  if (config.dev) {
+    console.debug(exprs);
+    console.debug(JSON.stringify(exprs));
+    let iolist = exprs.map(expr => expr.toIDLString());
+    console.debug(iolist);
+    console.debug(debugFormat(iolist));
+  }
   console.log("ok.");
   process.exit(0);
 }

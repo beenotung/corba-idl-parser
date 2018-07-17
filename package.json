@@ -8,8 +8,10 @@
     "postformat": "tslint -p . --fix",
     "dev": "npm run format && npm test",
     "gen-type": "ts-node tool/gen-type.ts",
-    "test": "ts-node src/index.ts ./examples/struct.idl",
-    "test0": "ts-node src/index.ts ./examples/idl/data.idl"
+    "test:struct": "ts-node src/index.ts ./examples/struct.idl",
+    "test:json": "ts-node test/idl2json.ts",
+    "test:import": "ts-node src/index.ts ./examples/idl/shared.idl",
+    "test": "ts-node src/index.ts ./examples/idl/data.idl"
   },
   "repository": {
     "type": "git",
